@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BUILTIN_FOODS } from '../../data/foods';
 import { addDays } from '../dates';
-import { buildGeminiBody, extractJson, filesUrl, geminiText, geminiUrl } from '../llm';
+import { buildGeminiBody, extractJson, filesUrl, geminiText, geminiUrl, sortGeminiModels } from '../llm';
 import { buildTargets, cleanNutrients, formulaTdee, sumEntries } from '../nutrition';
 import { offToFood } from '../off';
 import { parseLabelText } from '../ocr';
@@ -186,6 +186,19 @@ describe('LLM helpers', () => {
     expect(body.contents.map((c: any) => c.role)).toEqual(['user', 'model', 'user']);
     expect(body.contents[2].parts).toEqual([{ text: '看圖' }, { inline_data: { mime_type: 'image/jpeg', data: 'AAA' } }]);
     expect(body.generationConfig.temperature).toBe(0.5);
+  });
+
+  it('puts the newest stable Flash model first and drops unusable ones', () => {
+    const ids = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-flash-latest', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.8-flash-tts', 'gemini-3.1-flash-image', 'gemini-omni-flash-preview', 'gemma-4-31b-it', 'gemini-4-argon', 'gemini-3.1-pro-preview'];
+    expect(sortGeminiModels(ids.map((id) => ({ id }))).map((m) => m.id)).toEqual([
+      'gemini-3.8-flash',
+      'gemini-3.5-flash',
+      'gemini-2.5-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-3-flash-preview',
+      'gemini-3.1-pro-preview',
+      'gemini-2.5-pro',
+    ]);
   });
 
   it('reads Gemini responses and skips thought parts', () => {

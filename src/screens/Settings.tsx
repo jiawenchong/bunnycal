@@ -201,7 +201,12 @@ function AiSection() {
       const list = await listModels(c);
       setModels(list);
       if (!list.length) setResult({ ok: false, text: '❌ 清單是空的，請確認 key 是否正確' });
-      else if (!c.model || !list.some((m) => m.id === c.model)) set('model', list[0].id);
+      else {
+        const model = c.model && list.some((m) => m.id === c.model) ? c.model : list[0].id;
+        // 其他穩定版 Flash 當備援
+        const fallbackModels = list.map((m) => m.id).filter((id) => id !== model && /^gemini-[\d.]+-flash$/.test(id)).slice(0, 2);
+        setC({ ...c, model, fallbackModels });
+      }
     } catch (e) {
       fail(e);
     } finally {
@@ -246,7 +251,7 @@ function AiSection() {
           <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
             aistudio.google.com/apikey
           </a>{' '}
-          建立 API key，貼到下面，再按「載入模型清單」。建議選 Flash 系列（比較快、免費額度比較多）。不需要 VPN。
+          建立 API key，用「Copy key」複製後貼到下面（不要手打，數字 0 和英文 O 很容易打錯），再按「載入模型清單」，會自動選最新的 Flash 模型。不需要 VPN。
         </p>
       )}
       <label className="field">

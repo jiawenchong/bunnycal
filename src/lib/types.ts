@@ -120,6 +120,8 @@ export interface LlmConfig {
   endpoint: string;
   apiKey: string;
   model: string;
+  /** 主模型太忙時依序改用的模型（Gemini） */
+  fallbackModels?: string[];
   /** 每次餐點紀錄後自動請兔兔評論 */
   autoFeedback: boolean;
 }

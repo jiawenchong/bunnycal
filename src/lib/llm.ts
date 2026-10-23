@@ -22,10 +22,12 @@ export const DEFAULT_LLM: LlmConfig = {
 };
 
 export class LlmError extends Error {
-  constructor(message: string, public hint?: string) {
+  constructor(message: string, public hint?: string, public status?: number) {
     super(message);
   }
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function filesUrl(endpoint: string) {
   const i = endpoint.lastIndexOf('/chat/completions');
@@ -65,7 +67,9 @@ async function request(url: string, init: RequestInit, timeoutMs: number): Promi
     if (res.status === 404 && /model/i.test(String(msg)))
       throw new LlmError('找不到這個模型（404）', '請按「載入模型清單」從清單裡選。');
     if (res.status === 429) throw new LlmError('請求太頻繁或超過免費額度（429）', '等一兩分鐘再試，或明天額度重置後再用。');
-    if (res.status === 504) throw new LlmError('伺服器逾時（504）', '圖片太多容易逾時，請減少張數。');
+    if (res.status === 504) throw new LlmError('伺服器逾時（504）', '圖片太多容易逾時，請減少張數。', 504);
+    if (res.status === 503)
+      throw new LlmError('模型目前太忙（503）', '這是暫時的，等一下再試，或在設定裡換另一個 Flash 模型。', 503);
     throw new LlmError(`伺服器錯誤（${res.status}）`, String(msg ?? ''));
   }
   return json;
@@ -230,16 +234,26 @@ async function askGemini(cfg: LlmConfig, prompt: string, images: Blob[], opts: A
       return { mime: b.type || 'image/jpeg', data: url.slice(url.indexOf(',') + 1) };
     }),
   );
-  const res = await request(
-    geminiUrl(cfg.endpoint, cfg.model),
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.apiKey },
-      body: JSON.stringify(buildGeminiBody(prompt, parts, opts)),
-    },
-    420000,
-  );
-  return geminiText(res);
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.apiKey },
+    body: JSON.stringify(buildGeminiBody(prompt, parts, opts)),
+  };
+  // 尖峰時段常回 503（太忙）：主模型重試兩次，還是太忙就依序改用備援模型
+  const models = [cfg.model, ...(cfg.fallbackModels ?? []).filter((m) => m && m !== cfg.model)];
+  let lastErr: unknown;
+  for (const model of models) {
+    for (let attempt = 0; attempt < (model === cfg.model ? 3 : 1); attempt++) {
+      if (attempt) await sleep(2000 * attempt);
+      try {
+        return geminiText(await request(geminiUrl(cfg.endpoint, model), init, 420000));
+      } catch (e) {
+        if (!(e instanceof LlmError && e.status === 503)) throw e;
+        lastErr = e;
+      }
+    }
+  }
+  throw lastErr;
 }
 
 /** 列出可用的模型（讓使用者用選的，不用自己打名稱） */
@@ -251,13 +265,31 @@ export async function listModels(cfg: LlmConfig): Promise<{ id: string; label: s
       { method: 'GET', headers: { 'x-goog-api-key': cfg.apiKey } },
       30000,
     );
-    return (res?.models ?? [])
-      .filter((m: any) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
-      .map((m: any) => ({ id: String(m.name).replace(/^models\//, ''), label: m.displayName ?? m.name }))
-      .filter((m: any) => /gemini/i.test(m.id) && !/embedding|tts|image-generation|native-audio|live/i.test(m.id))
-      .sort((a: any, b: any) => Number(/flash/.test(b.id)) - Number(/flash/.test(a.id)) || b.id.localeCompare(a.id));
+    return sortGeminiModels(
+      (res?.models ?? [])
+        .filter((m: any) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
+        .map((m: any) => ({ id: String(m.name).replace(/^models\//, ''), label: m.displayName ?? m.name })),
+    );
   }
   const base = cfg.endpoint.replace(/\/chat\/completions\/?$/, '');
   const res = await request(`${base}/models`, { method: 'GET', headers: { Authorization: `Bearer ${cfg.apiKey}` } }, 30000);
   return (res?.data ?? res?.models ?? []).map((m: any) => ({ id: m.id ?? m.name, label: m.id ?? m.name }));
+}
+
+const GEMINI_SKIP = /tts|image|banana|robotics|computer-use|transcribe|customtools|embedding|live|audio|omni|latest|argon/i;
+
+function geminiVersion(id: string) {
+  const m = id.match(/^gemini-(\d+(?:\.\d+)?)/);
+  return m ? parseFloat(m[1]) : 0;
+}
+
+/**
+ * 只留下能看圖、適合記錄飲食的 Gemini 模型，排序：穩定版 Flash（新→舊）→ 其他 Flash → Pro。
+ * 舊模型（例如 2.5）可能已不開放給新帳號，所以新的排前面。
+ */
+export function sortGeminiModels<T extends { id: string }>(models: T[]): T[] {
+  const rank = (id: string) => (/^gemini-[\d.]+-flash$/.test(id) ? 0 : /flash/.test(id) ? 1 : 2);
+  return models
+    .filter((m) => /^gemini-/.test(m.id) && !GEMINI_SKIP.test(m.id))
+    .sort((a, b) => rank(a.id) - rank(b.id) || geminiVersion(b.id) - geminiVersion(a.id) || a.id.localeCompare(b.id));
 }
