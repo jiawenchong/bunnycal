@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BUILTIN_FOODS } from '../../data/foods';
 import { addDays } from '../dates';
-import { extractJson, filesUrl } from '../llm';
+import { buildGeminiBody, extractJson, filesUrl, geminiText, geminiUrl } from '../llm';
 import { buildTargets, cleanNutrients, formulaTdee, sumEntries } from '../nutrition';
 import { offToFood } from '../off';
 import { parseLabelText } from '../ocr';
@@ -164,6 +164,33 @@ describe('offline text parsing', () => {
 describe('LLM helpers', () => {
   it('derives the files endpoint', () => {
     expect(filesUrl('https://x.com:4231/public/kits/openai/v1/chat/completions')).toBe('https://x.com:4231/public/kits/openai/v1/files');
+  });
+
+  it('builds Gemini native URLs from any base form', () => {
+    const want = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-x-flash:generateContent';
+    expect(geminiUrl('https://generativelanguage.googleapis.com/v1beta', 'gemini-x-flash')).toBe(want);
+    expect(geminiUrl('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'models/gemini-x-flash')).toBe(want);
+    expect(geminiUrl('', ' gemini-x-flash ')).toBe(want);
+  });
+
+  it('builds Gemini request bodies with images, history and system prompt', () => {
+    const body = buildGeminiBody('看圖', [{ mime: 'image/jpeg', data: 'AAA' }], {
+      system: '你是蹦蹦',
+      history: [
+        { role: 'user', text: '嗨' },
+        { role: 'assistant', text: '蹦！' },
+      ],
+      temperature: 0.5,
+    });
+    expect(body.systemInstruction).toEqual({ parts: [{ text: '你是蹦蹦' }] });
+    expect(body.contents.map((c: any) => c.role)).toEqual(['user', 'model', 'user']);
+    expect(body.contents[2].parts).toEqual([{ text: '看圖' }, { inline_data: { mime_type: 'image/jpeg', data: 'AAA' } }]);
+    expect(body.generationConfig.temperature).toBe(0.5);
+  });
+
+  it('reads Gemini responses and skips thought parts', () => {
+    expect(geminiText({ candidates: [{ content: { parts: [{ text: '想…', thought: true }, { text: '答案' }] } }] })).toBe('答案');
+    expect(() => geminiText({ promptFeedback: { blockReason: 'SAFETY' } })).toThrow('安全機制');
   });
 
   it('extracts JSON from fenced or chatty output', () => {

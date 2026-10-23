@@ -112,7 +112,7 @@ export interface TdeeCheckin {
   note: string;
 }
 
-export type LlmMode = 'files' | 'openai';
+export type LlmMode = 'files' | 'openai' | 'gemini';
 
 export interface LlmConfig {
   enabled: boolean;
